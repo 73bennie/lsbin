@@ -1,0 +1,170 @@
+#!/bin/bash
+# DESC: Script library with cumulative search, 'r #' Run, 'e #' Edit, and 'd #' Delete
+# TAGS: utility, cli, documentation, tools, search, editing
+
+SCRIPT_DIR="/home/mrthingfish/.bin"
+TRASH_DIR="/home/mrthingfish/.trash"
+search_query=""
+
+# Ensure trash directory exists
+mkdir -p "$TRASH_DIR"
+
+# Enable case-insensitive matching 
+shopt -s nocasematch
+
+while true;
+do
+    clear
+    script_count=0 
+    output_buffer=""
+    declare -a script_files 
+
+    # 1. Calculate dynamic column width 
+    max_name_length=0
+    for file in "$SCRIPT_DIR"/*;
+    do
+        if [[ -x "$file" && -f "$file" ]];
+        then
+            name=$(basename "$file")
+            (( ${#name} > max_name_length )) && max_name_length=${#name}
+        fi
+    done
+    col_width=$((max_name_length + 2))
+
+    # 2. Build the list (Cumulative, case-insensitive search) 
+    max_total_line=0
+    while read -r file;
+    do
+        filename=$(basename "$file")
+        tags=$(grep "^# TAGS:" "$file" | cut -d: -f2)
+        description=$(grep -m 1 "^# DESC:" "$file" | sed 's/^# DESC: //' || echo "No description")
+        
+        if [[ "$filename" != "lsbin" ]];
+        then
+            match=true
+            for word in $search_query;
+            do
+                if [[ ! "$filename" =~ $word ]] && [[ ! "$tags" =~ $word ]] && [[ ! "$description" =~ $word ]];
+                then
+                    match=false
+                    break
+                fi
+            done
+            
+            [[ "$match" == false ]] && continue
+
+            script_files+=("$file")
+            ((script_count++))
+            
+            raw_line=$(printf "[%2d] %-${col_width}s - %s" "$script_count" "$filename" "$description")
+            (( ${#raw_line} > max_total_line )) && max_total_line=${#raw_line}
+            
+            colored_line=$(printf "[\e[33m%2d\e[0m] %-${col_width}s - \e[32m%s\e[0m" "$script_count" "$filename" "$description")
+            output_buffer+="$colored_line\n"
+        fi
+    done < <(find "$SCRIPT_DIR" -maxdepth 1 -type f -executable | sort)
+
+    # 3. Draw the Interface 
+    divider_len=$((max_total_line > 45 ? max_total_line : 45))
+    horizontal_line=$(printf '%.0s-' $(seq 1 $divider_len))
+
+    echo -e "\e[1m$horizontal_line\e[0m"
+    if [[ -n "$search_query" ]];
+    then
+        echo -e " FILTER: \e[33m$search_query\e[0m (Press 'Enter' to clear filter)"
+    else
+        echo -e " \e[1mCOMMAND LIBRARY\e[0m"
+    fi
+    echo -e "\e[1m$horizontal_line\e[0m"
+    printf "     \e[1m%-${col_width}s\e[0m - Description\n" "Script Name"
+    echo -e "\e[1m$horizontal_line\e[0m"
+    
+    if [[ $script_count -eq 0 ]];
+    then
+        echo -e "  \e[31mNo scripts found matching '$search_query'\e[0m"
+    else
+        echo -e -n "$output_buffer"
+    fi
+    
+    echo -e "\e[1m$horizontal_line\e[0m"
+    echo -e "\e[1mTotal Scripts:\e[0m $script_count"
+    echo ""
+
+    # 4. Interactive Menu
+    echo -e "\e[1mOptions:\e[0m [#] View | [r #] Run | [e #] Edit | [d #] Trash | [s]earch | [Enter] $([[ -n $search_query ]] && echo "Clear" || echo "Quit")"
+    read -p "Selection: " choice
+
+    case "$choice" in
+        "") 
+            if [[ -n "$search_query" ]];
+            then
+                search_query="" 
+            else
+                clear;
+                break 
+            fi
+            ;;
+        [qQ]) clear; break ;;
+        [sS]) 
+            read -p "Add keyword to narrow search: " new_word
+            search_query="$(echo -e "${search_query} ${new_word}" | sed -e 's/^[[:space:]]*//')" 
+            ;;
+        # Run logic (e.g., r 5) 
+        r\ [0-9]*)
+            run_num=$(echo "$choice" | awk '{print $2}')
+            if (( run_num > 0 && run_num <= script_count ));
+            then
+                selected_script="${script_files[$((run_num-1))]}"
+                clear
+                echo -e "\e[1;32mExecuting: $(basename "$selected_script")\e[0m"
+                echo "$horizontal_line"
+                "$selected_script"
+                echo "$horizontal_line"
+                read -p "Execution finished. Press [Enter] to return..."
+            fi
+            ;;
+        # Edit logic (e.g., e 5)
+        e\ [0-9]*)
+            edit_num=$(echo "$choice" | awk '{print $2}')
+            if (( edit_num > 0 && edit_num <= script_count ));
+            then
+                selected_file="${script_files[$((edit_num-1))]}"
+                vim "$selected_file"
+            fi
+            ;;
+        # Trash logic (e.g., d 5)
+        d\ [0-9]*)
+            del_num=$(echo "$choice" | awk '{print $2}')
+            if (( del_num > 0 && del_num <= script_count )); then
+                selected_file="${script_files[$((del_num-1))]}"
+                filename=$(basename "$selected_file")
+                
+                echo -e "\n\e[1;31mMove '$filename' to trash? (y/N)\e[0m"
+                read -p "> " confirm
+                
+                if [[ "$confirm" =~ ^[yY]$ ]]; then
+                    mv "$selected_file" "$TRASH_DIR/"
+                    echo -e "\e[32m$filename moved to $TRASH_DIR\e[0m"
+                    sleep 1
+                else
+                    echo "Action cancelled."
+                    sleep 1
+                fi
+            fi
+            ;;
+        [0-9]*)
+            if (( choice > 0 && choice <= script_count ));
+            then
+                selected_file="${script_files[$((choice-1))]}"
+                clear
+                echo -e "\e[1;33mDOCUMENTATION: $(basename "$selected_file")\e[0m"
+                echo "$horizontal_line"
+                sed -n "/: << 'DOC'/,/DOC/p" "$selected_file" | grep -Ev "(: << 'DOC'|DOC)"
+                echo "$horizontal_line"
+                echo ""
+                read -p "Press [Enter] to return..."
+            fi
+            ;;
+    esac
+done
+
