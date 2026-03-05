@@ -4,10 +4,12 @@
 
 SCRIPT_DIR="/home/mrthingfish/.bin"
 TRASH_DIR="/home/mrthingfish/.trash"
+HIDDEN_FILE="$TRASH_DIR/.lsbin_hidden"
 search_query=""
 
 # Ensure trash directory exists
 mkdir -p "$TRASH_DIR"
+touch "$HIDDEN_FILE"
 
 # Enable case-insensitive matching 
 shopt -s nocasematch
@@ -41,6 +43,11 @@ do
         
         if [[ "$filename" != "lsbin" ]];
         then
+            if grep -Fxq "$filename" "$HIDDEN_FILE";
+            then
+                continue
+            fi
+
             match=true
             for word in $search_query;
             do
@@ -91,7 +98,7 @@ do
     echo ""
 
     # 4. Interactive Menu
-    echo -e "\e[1mOptions:\e[0m [#] View | [r #] Run | [e #] Edit | [d #] Trash | [s]earch | [Enter] $([[ -n $search_query ]] && echo "Clear" || echo "Quit")"
+    echo -e "\e[1mOptions:\e[0m [#] View | [r #] Run | [e #] Edit | [d #] Trash | [h #] Hide | [u] Unhide | [s]earch | [Enter] $([[ -n $search_query ]] && echo "Clear" || echo "Quit")"
     read -p "Selection: " choice
 
     case "$choice" in
@@ -152,6 +159,58 @@ do
                 fi
             fi
             ;;
+        # Hide logic (e.g., h 5)
+        h\ [0-9]*)
+            hide_num=$(echo "$choice" | awk '{print $2}')
+            if (( hide_num > 0 && hide_num <= script_count )); then
+                selected_file="${script_files[$((hide_num-1))]}"
+                filename=$(basename "$selected_file")
+
+                if grep -Fxq "$filename" "$HIDDEN_FILE";
+                then
+                    echo -e "\e[33m$filename is already hidden.\e[0m"
+                else
+                    echo "$filename" >> "$HIDDEN_FILE"
+                    echo -e "\e[32m$filename is now hidden from view.\e[0m"
+                fi
+                sleep 1
+            fi
+            ;;
+        # Unhide logic
+        [uU])
+            mapfile -t hidden_scripts < "$HIDDEN_FILE"
+
+            # Trim empty lines
+            filtered_hidden=()
+            for hidden_script in "${hidden_scripts[@]}";
+            do
+                [[ -n "$hidden_script" ]] && filtered_hidden+=("$hidden_script")
+            done
+
+            if (( ${#filtered_hidden[@]} == 0 ));
+            then
+                echo -e "\e[33mNo hidden scripts to unhide.\e[0m"
+                sleep 1
+            else
+                clear
+                echo -e "\e[1;36mHidden Scripts\e[0m"
+                echo "$horizontal_line"
+                for i in "${!filtered_hidden[@]}";
+                do
+                    printf "[%2d] %s\n" "$((i+1))" "${filtered_hidden[$i]}"
+                done
+                echo "$horizontal_line"
+                read -p "Enter number to unhide (or press Enter to cancel): " unhide_choice
+
+                if [[ "$unhide_choice" =~ ^[0-9]+$ ]] && (( unhide_choice > 0 && unhide_choice <= ${#filtered_hidden[@]} ));
+                then
+                    to_unhide="${filtered_hidden[$((unhide_choice-1))]}"
+                    grep -Fxv "$to_unhide" "$HIDDEN_FILE" > "$HIDDEN_FILE.tmp" && mv "$HIDDEN_FILE.tmp" "$HIDDEN_FILE"
+                    echo -e "\e[32m$to_unhide is visible again.\e[0m"
+                    sleep 1
+                fi
+            fi
+            ;;
         [0-9]*)
             if (( choice > 0 && choice <= script_count ));
             then
@@ -167,4 +226,3 @@ do
             ;;
     esac
 done
-
